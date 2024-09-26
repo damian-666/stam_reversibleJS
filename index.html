@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Interactive Fluid Simulation with Controls</title>
+    <title>Interactive Fluid Simulation with Walls</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -59,13 +59,14 @@
     <div id="debugInfo">
         <p>Density at Mouse: <span id="densityValue">0</span></p>
         <p>Velocity at Mouse: (<span id="velocityX">0</span>, <span id="velocityY">0</span>)</p>
+        <p>Wall at Mouse: <span id="wallValue">No</span></p>
     </div>
     <script>
         // Define grid dimensions
         const N = 256; // Width
         const M = 128;  // Height
 
-        // Initialize arrays for velocity and density
+        // Initialize arrays for velocity, density, and walls
         let size = N * M;
         let u = new Float32Array(size);    // Velocity in x-direction
         let v = new Float32Array(size);    // Velocity in y-direction
@@ -73,6 +74,7 @@
         let v_prev = new Float32Array(size);
         let density = new Float32Array(size);
         let density_prev = new Float32Array(size);
+        let isWall = new Uint8Array(size); // Wall representation (0: no wall, 1: wall)
 
         // Indexing function
         function IX(x, y) {
@@ -99,7 +101,9 @@
             for (let k = 0; k < 20; k++) {
                 for (let j = 1; j < M - 1; j++) {
                     for (let i = 1; i < N - 1; i++) {
-                        x[IX(i, j)] = (x0[IX(i, j)] + a * (
+                        let idx = IX(i, j);
+                        if (isWall[idx]) continue; // Skip wall cells
+                        x[idx] = (x0[idx] + a * (
                             x[IX(i - 1, j)] +
                             x[IX(i + 1, j)] +
                             x[IX(i, j - 1)] +
@@ -118,8 +122,10 @@
 
             for (let j = 1; j < M - 1; j++) {
                 for (let i = 1; i < N - 1; i++) {
-                    let x = i - dt0_x * u[IX(i, j)];
-                    let y = j - dt0_y * v[IX(i, j)];
+                    let idx = IX(i, j);
+                    if (isWall[idx]) continue; // Skip wall cells
+                    let x = i - dt0_x * u[idx];
+                    let y = j - dt0_y * v[idx];
 
                     if (x < 0.5) x = 0.5;
                     if (x > N - 1.5) x = N - 1.5;
@@ -136,9 +142,17 @@
                     let t1 = y - j0;
                     let t0 = 1 - t1;
 
-                    d[IX(i, j)] =
-                        s0 * (t0 * d0[IX(i0, j0)] + t1 * d0[IX(i0, j1)]) +
-                        s1 * (t0 * d0[IX(i1, j0)] + t1 * d0[IX(i1, j1)]);
+                    // Check for walls and adjust accordingly
+                    let idx_i0j0 = IX(i0, j0);
+                    let idx_i0j1 = IX(i0, j1);
+                    let idx_i1j0 = IX(i1, j0);
+                    let idx_i1j1 = IX(i1, j1);
+
+                    d[idx] =
+                        s0 * (t0 * (!isWall[idx_i0j0] ? d0[idx_i0j0] : d0[idx]) +
+                              t1 * (!isWall[idx_i0j1] ? d0[idx_i0j1] : d0[idx])) +
+                        s1 * (t0 * (!isWall[idx_i1j0] ? d0[idx_i1j0] : d0[idx]) +
+                              t1 * (!isWall[idx_i1j1] ? d0[idx_i1j1] : d0[idx]));
                 }
             }
             setBoundary(b, d);
@@ -150,11 +164,17 @@
 
             for (let j = 1; j < M - 1; j++) {
                 for (let i = 1; i < N - 1; i++) {
-                    div[IX(i, j)] = -0.5 * (
+                    let idx = IX(i, j);
+                    if (isWall[idx]) {
+                        u[idx] = 0;
+                        v[idx] = 0;
+                        continue;
+                    }
+                    div[idx] = -0.5 * (
                         u[IX(i + 1, j)] - u[IX(i - 1, j)] +
                         v[IX(i, j + 1)] - v[IX(i, j - 1)]
                     ) * h;
-                    p[IX(i, j)] = 0;
+                    p[idx] = 0;
                 }
             }
             setBoundary(0, div);
@@ -164,8 +184,10 @@
 
             for (let j = 1; j < M - 1; j++) {
                 for (let i = 1; i < N - 1; i++) {
-                    u[IX(i, j)] -= 0.5 * (p[IX(i + 1, j)] - p[IX(i - 1, j)]) / h;
-                    v[IX(i, j)] -= 0.5 * (p[IX(i, j + 1)] - p[IX(i, j - 1)]) / h;
+                    let idx = IX(i, j);
+                    if (isWall[idx]) continue;
+                    u[idx] -= 0.5 * (p[IX(i + 1, j)] - p[IX(i - 1, j)]) / h;
+                    v[idx] -= 0.5 * (p[IX(i, j + 1)] - p[IX(i, j - 1)]) / h;
                 }
             }
             setBoundary(1, u);
@@ -182,6 +204,8 @@
                 x[IX(0, j)] = b === 1 ? -x[IX(1, j)] : x[IX(1, j)];
                 x[IX(N - 1, j)] = b === 1 ? -x[IX(N - 2, j)] : x[IX(N - 2, j)];
             }
+
+            // Walls at boundaries
             x[IX(0, 0)] = 0.5 * (x[IX(1, 0)] + x[IX(0, 1)]);
             x[IX(0, M - 1)] = 0.5 * (x[IX(1, M - 1)] + x[IX(0, M - 2)]);
             x[IX(N - 1, 0)] = 0.5 * (x[IX(N - 2, 0)] + x[IX(N - 1, 1)]);
@@ -210,6 +234,14 @@
             advect(2, v, v_prev, u_prev, v_prev, dt);
 
             project(u, v, u_prev, v_prev);
+
+            // Zero velocities in wall cells
+            for (let i = 0; i < size; i++) {
+                if (isWall[i]) {
+                    u[i] = 0;
+                    v[i] = 0;
+                }
+            }
         }
 
         function densityStep(x, x0, u, v, diff, dt) {
@@ -224,6 +256,13 @@
             [x0, x] = [x, x0];
 
             advect(0, x, x0, u, v, dt);
+
+            // Zero density in wall cells
+            for (let i = 0; i < size; i++) {
+                if (isWall[i]) {
+                    x[i] = 0;
+                }
+            }
         }
 
         // Main simulation variables
@@ -246,14 +285,24 @@
         let mouseY = 0;
         let lastMouseX = 0;
         let lastMouseY = 0;
+        let isRightClick = false;
+
+        canvas.addEventListener('contextmenu', function(e) {
+            e.preventDefault(); // Prevent context menu from appearing
+        });
 
         canvas.addEventListener('mousedown', function(e) {
             isMouseDown = true;
+            isRightClick = e.button === 2; // Right-click
             updateMousePosition(e);
+            if (isRightClick) {
+                toggleWallAtMouse();
+            }
         });
 
         canvas.addEventListener('mouseup', function(e) {
             isMouseDown = false;
+            isRightClick = false;
         });
 
         canvas.addEventListener('mousemove', function(e) {
@@ -261,8 +310,12 @@
             lastMouseY = mouseY;
             updateMousePosition(e);
             if (isMouseDown) {
-                addDensityAtMouse();
-                addVelocityAtMouse();
+                if (isRightClick) {
+                    toggleWallAtMouse();
+                } else {
+                    addDensityAtMouse();
+                    addVelocityAtMouse();
+                }
             }
             updateDebugInfo();
         });
@@ -280,8 +333,9 @@
                 for (let i = -brushSize; i <= brushSize; i++) {
                     let x = mouseX + i;
                     let y = mouseY + j;
-                    if (x >= 0 && x < N && y >= 0 && y < M) {
-                        density_prev[IX(x, y)] += 100;
+                    let idx = IX(x, y);
+                    if (x >= 0 && x < N && y >= 0 && y < M && !isWall[idx]) {
+                        density_prev[idx] += 100;
                     }
                 }
             }
@@ -295,9 +349,28 @@
                 for (let i = -brushSize; i <= brushSize; i++) {
                     let x = mouseX + i;
                     let y = mouseY + j;
+                    let idx = IX(x, y);
+                    if (x >= 0 && x < N && y >= 0 && y < M && !isWall[idx]) {
+                        u_prev[idx] += dx * strength;
+                        v_prev[idx] += dy * strength;
+                    }
+                }
+            }
+        }
+
+        function toggleWallAtMouse() {
+            for (let j = -brushSize; j <= brushSize; j++) {
+                for (let i = -brushSize; i <= brushSize; i++) {
+                    let x = mouseX + i;
+                    let y = mouseY + j;
+                    let idx = IX(x, y);
                     if (x >= 0 && x < N && y >= 0 && y < M) {
-                        u_prev[IX(x, y)] += dx * strength;
-                        v_prev[IX(x, y)] += dy * strength;
+                        isWall[idx] = isWall[idx] ? 0 : 1;
+                        // Clear density and velocity at wall
+                        if (isWall[idx]) {
+                            u[idx] = v[idx] = u_prev[idx] = v_prev[idx] = 0;
+                            density[idx] = density_prev[idx] = 0;
+                        }
                     }
                 }
             }
@@ -307,15 +380,18 @@
         let densityDisplay = document.getElementById('densityValue');
         let velocityXDisplay = document.getElementById('velocityX');
         let velocityYDisplay = document.getElementById('velocityY');
+        let wallDisplay = document.getElementById('wallValue');
 
         function updateDebugInfo() {
             let idx = IX(mouseX, mouseY);
             let d = density[idx].toFixed(2);
             let velX = u[idx].toFixed(2);
             let velY = v[idx].toFixed(2);
+            let wall = isWall[idx] ? "Yes" : "No";
             densityDisplay.textContent = d;
             velocityXDisplay.textContent = velX;
             velocityYDisplay.textContent = velY;
+            wallDisplay.textContent = wall;
         }
 
         // Simulation loop
@@ -325,11 +401,13 @@
                 return;
             }
 
+            let simDt = reverse ? -dt : dt;
+
             // Velocity step
-            velocityStep(u, v, u_prev, v_prev, viscosity, dt);
+            velocityStep(u, v, u_prev, v_prev, viscosity, simDt);
 
             // Density step
-            densityStep(density, density_prev, u, v, 0.0001, dt);
+            densityStep(density, density_prev, u, v, 0.0001, simDt);
 
             // Render the density field
             renderDensity();
@@ -350,13 +428,21 @@
             for (let j = 0; j < M; j++) {
                 for (let i = 0; i < N; i++) {
                     let idx = IX(i, j);
-                    let d = density[idx];
-                    let intensity = Math.min(255, d * 10);
                     let index = (i + j * N) * 4;
-                    data[index + 0] = (color.r * intensity) / 255; // Red
-                    data[index + 1] = (color.g * intensity) / 255; // Green
-                    data[index + 2] = (color.b * intensity) / 255; // Blue
-                    data[index + 3] = 255;   // Alpha
+                    if (isWall[idx]) {
+                        // Draw walls in black
+                        data[index + 0] = 0;
+                        data[index + 1] = 0;
+                        data[index + 2] = 0;
+                        data[index + 3] = 255; // Alpha
+                    } else {
+                        let d = density[idx];
+                        let intensity = Math.min(255, d * 10);
+                        data[index + 0] = (color.r * intensity) / 255;
+                        data[index + 1] = (color.g * intensity) / 255;
+                        data[index + 2] = (color.b * intensity) / 255;
+                        data[index + 3] = 255; // Alpha
+                    }
                 }
             }
             ctx.putImageData(imageData, 0, 0);
@@ -411,11 +497,6 @@
         reverseBtn.addEventListener('click', function() {
             reverse = !reverse;
             reverseBtn.textContent = reverse ? 'Forward' : 'Reverse';
-            // Reverse the velocities
-            for (let i = 0; i < size; i++) {
-                u[i] = -u[i];
-                v[i] = -v[i];
-            }
         });
 
         // Start/Stop Button
