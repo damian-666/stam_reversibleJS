@@ -2,13 +2,21 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Interactive Fluid Simulation with Debug Output</title>
+    <title>Interactive Fluid Simulation with Controls</title>
     <style>
         body {
             font-family: Arial, sans-serif;
         }
         #controls {
             margin-bottom: 10px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        #controls > div {
+            display: flex;
+            align-items: center;
+            gap: 5px;
         }
         #canvas {
             border: 1px solid black;
@@ -25,9 +33,26 @@
 </head>
 <body>
     <div id="controls">
-        <label for="dtSlider">Delta T:</label>
-        <input type="range" id="dtSlider" min="-5" max="5" value="1" step="0.1">
-        <span id="dtValue">1</span>
+        <div>
+            <label for="dtSlider">Delta T:</label>
+            <input type="range" id="dtSlider" min="0.1" max="2" value="0.1" step="0.1">
+            <span id="dtValue">0.1</span>
+        </div>
+        <div>
+            <label for="viscositySlider">Viscosity:</label>
+            <input type="range" id="viscositySlider" min="0" max="0.01" value="0.0001" step="0.0001">
+            <span id="viscosityValue">0.0001</span>
+        </div>
+        <div>
+            <label for="brushSizeSlider">Brush Size:</label>
+            <input type="range" id="brushSizeSlider" min="1" max="10" value="2" step="1">
+            <span id="brushSizeValue">2</span>
+        </div>
+        <div>
+            <label for="colorPicker">Color:</label>
+            <input type="color" id="colorPicker" value="#ff0000">
+        </div>
+        <button id="reverseBtn">Reverse</button>
         <button id="startStopBtn">Pause</button>
     </div>
     <canvas id="canvas"></canvas>
@@ -37,8 +62,8 @@
     </div>
     <script>
         // Define grid dimensions
-        const N = 256; // Width (Increased for better visibility)
-        const M = 128;  // Height (Increased for better visibility)
+        const N = 256; // Width
+        const M = 128;  // Height
 
         // Initialize arrays for velocity and density
         let size = N * M;
@@ -204,6 +229,10 @@
         // Main simulation variables
         let dt = 0.1; // Initial time step
         let isRunning = true;
+        let reverse = false;
+        let viscosity = 0.0001;
+        let brushSize = 2;
+        let color = { r: 255, g: 0, b: 0 }; // Initial color: Red
 
         // Canvas and context
         let canvas = document.getElementById('canvas');
@@ -247,13 +276,12 @@
         }
 
         function addDensityAtMouse() {
-            let radius = 2;
-            for (let j = -radius; j <= radius; j++) {
-                for (let i = -radius; i <= radius; i++) {
+            for (let j = -brushSize; j <= brushSize; j++) {
+                for (let i = -brushSize; i <= brushSize; i++) {
                     let x = mouseX + i;
                     let y = mouseY + j;
                     if (x >= 0 && x < N && y >= 0 && y < M) {
-                        density_prev[IX(x, y)] += 50;
+                        density_prev[IX(x, y)] += 100;
                     }
                 }
             }
@@ -262,10 +290,9 @@
         function addVelocityAtMouse() {
             let dx = mouseX - lastMouseX;
             let dy = mouseY - lastMouseY;
-            let strength = 1;
-            let radius = 2;
-            for (let j = -radius; j <= radius; j++) {
-                for (let i = -radius; i <= radius; i++) {
+            let strength = 5;
+            for (let j = -brushSize; j <= brushSize; j++) {
+                for (let i = -brushSize; i <= brushSize; i++) {
                     let x = mouseX + i;
                     let y = mouseY + j;
                     if (x >= 0 && x < N && y >= 0 && y < M) {
@@ -299,7 +326,7 @@
             }
 
             // Velocity step
-            velocityStep(u, v, u_prev, v_prev, 0.0001, dt);
+            velocityStep(u, v, u_prev, v_prev, viscosity, dt);
 
             // Density step
             densityStep(density, density_prev, u, v, 0.0001, dt);
@@ -324,29 +351,72 @@
                 for (let i = 0; i < N; i++) {
                     let idx = IX(i, j);
                     let d = density[idx];
-                    let color = Math.min(255, d * 5);
+                    let intensity = Math.min(255, d * 10);
                     let index = (i + j * N) * 4;
-                    data[index + 0] = color; // Red
-                    data[index + 1] = 0;     // Green
-                    data[index + 2] = 0;     // Blue
+                    data[index + 0] = (color.r * intensity) / 255; // Red
+                    data[index + 1] = (color.g * intensity) / 255; // Green
+                    data[index + 2] = (color.b * intensity) / 255; // Blue
                     data[index + 3] = 255;   // Alpha
                 }
             }
             ctx.putImageData(imageData, 0, 0);
         }
 
-        // Delta T Slider
+        // Controls
         let dtSlider = document.getElementById('dtSlider');
         let dtValueDisplay = document.getElementById('dtValue');
+        let viscositySlider = document.getElementById('viscositySlider');
+        let viscosityValueDisplay = document.getElementById('viscosityValue');
+        let brushSizeSlider = document.getElementById('brushSizeSlider');
+        let brushSizeValueDisplay = document.getElementById('brushSizeValue');
+        let colorPicker = document.getElementById('colorPicker');
+        let reverseBtn = document.getElementById('reverseBtn');
 
         function updateDt() {
             let dtSliderValue = parseFloat(dtSlider.value);
-            dt = 0.1 * dtSliderValue;
+            dt = dtSliderValue;
             dtValueDisplay.textContent = dtSliderValue.toFixed(1);
         }
 
+        function updateViscosity() {
+            viscosity = parseFloat(viscositySlider.value);
+            viscosityValueDisplay.textContent = viscosity.toExponential(1);
+        }
+
+        function updateBrushSize() {
+            brushSize = parseInt(brushSizeSlider.value);
+            brushSizeValueDisplay.textContent = brushSize;
+        }
+
+        function updateColor() {
+            let hex = colorPicker.value;
+            color = {
+                r: parseInt(hex.substr(1, 2), 16),
+                g: parseInt(hex.substr(3, 2), 16),
+                b: parseInt(hex.substr(5, 2), 16)
+            };
+        }
+
         dtSlider.addEventListener('input', updateDt);
+        viscositySlider.addEventListener('input', updateViscosity);
+        brushSizeSlider.addEventListener('input', updateBrushSize);
+        colorPicker.addEventListener('input', updateColor);
+
         updateDt(); // Initialize dt
+        updateViscosity(); // Initialize viscosity
+        updateBrushSize(); // Initialize brush size
+        updateColor(); // Initialize color
+
+        // Reverse Button
+        reverseBtn.addEventListener('click', function() {
+            reverse = !reverse;
+            reverseBtn.textContent = reverse ? 'Forward' : 'Reverse';
+            // Reverse the velocities
+            for (let i = 0; i < size; i++) {
+                u[i] = -u[i];
+                v[i] = -v[i];
+            }
+        });
 
         // Start/Stop Button
         let startStopBtn = document.getElementById('startStopBtn');
