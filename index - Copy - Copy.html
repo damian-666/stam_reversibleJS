@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Interactive Fluid Simulation with Debug Output</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        #controls {
+            margin-bottom: 10px;
+        }
+        #canvas {
+            border: 1px solid black;
+            image-rendering: pixelated;
+            width: 100%; /* Make canvas take up full width */
+            height: auto; /* Maintain aspect ratio */
+            display: block;
+            margin: 0 auto;
+        }
+        #debugInfo {
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <label for="dtSlider">Delta T:</label>
+        <input type="range" id="dtSlider" min="-5" max="5" value="1" step="0.1">
+        <span id="dtValue">1</span>
+        <button id="startStopBtn">Pause</button>
+    </div>
+    <canvas id="canvas"></canvas>
+    <div id="debugInfo">
+        <p>Density at Mouse: <span id="densityValue">0</span></p>
+        <p>Velocity at Mouse: (<span id="velocityX">0</span>, <span id="velocityY">0</span>)</p>
+    </div>
+    <script>
+        // Define grid dimensions
+        const N = 256; // Width (Increased for better visibility)
+        const M = 128;  // Height (Increased for better visibility)
+
+        // Initialize arrays for velocity and density
+        let size = N * M;
+        let u = new Float32Array(size);    // Velocity in x-direction
+        let v = new Float32Array(size);    // Velocity in y-direction
+        let u_prev = new Float32Array(size);
+        let v_prev = new Float32Array(size);
+        let density = new Float32Array(size);
+        let density_prev = new Float32Array(size);
+
+        // Indexing function
+        function IX(x, y) {
+            x = Math.max(0, Math.min(x, N - 1));
+            y = Math.max(0, Math.min(y, M - 1));
+            return x + y * N;
+        }
+
+        // Add source function
+        function addSource(x, s, dt) {
+            for (let i = 0; i < x.length; i++) {
+                x[i] += s[i] * dt;
+            }
+        }
+
+        // Diffusion step
+        function diffuse(b, x, x0, diff, dt) {
+            let a = dt * diff * (N - 2) * (M - 2);
+            linearSolve(b, x, x0, a, 1 + 4 * a);
+        }
+
+        // Linear solver
+        function linearSolve(b, x, x0, a, c) {
+            for (let k = 0; k < 20; k++) {
+                for (let j = 1; j < M - 1; j++) {
+                    for (let i = 1; i < N - 1; i++) {
+                        x[IX(i, j)] = (x0[IX(i, j)] + a * (
+                            x[IX(i - 1, j)] +
+                            x[IX(i + 1, j)] +
+                            x[IX(i, j - 1)] +
+                            x[IX(i, j + 1)]
+                        )) / c;
+                    }
+                }
+                setBoundary(b, x);
+            }
+        }
+
+        // Advection step
+        function advect(b, d, d0, u, v, dt) {
+            let dt0_x = dt * (N - 2);
+            let dt0_y = dt * (M - 2);
+
+            for (let j = 1; j < M - 1; j++) {
+                for (let i = 1; i < N - 1; i++) {
+                    let x = i - dt0_x * u[IX(i, j)];
+                    let y = j - dt0_y * v[IX(i, j)];
+
+                    if (x < 0.5) x = 0.5;
+                    if (x > N - 1.5) x = N - 1.5;
+                    if (y < 0.5) y = 0.5;
+                    if (y > M - 1.5) y = M - 1.5;
+
+                    let i0 = Math.floor(x);
+                    let i1 = i0 + 1;
+                    let j0 = Math.floor(y);
+                    let j1 = j0 + 1;
+
+                    let s1 = x - i0;
+                    let s0 = 1 - s1;
+                    let t1 = y - j0;
+                    let t0 = 1 - t1;
+
+                    d[IX(i, j)] =
+                        s0 * (t0 * d0[IX(i0, j0)] + t1 * d0[IX(i0, j1)]) +
+                        s1 * (t0 * d0[IX(i1, j0)] + t1 * d0[IX(i1, j1)]);
+                }
+            }
+            setBoundary(b, d);
+        }
+
+        // Projection step
+        function project(u, v, p, div) {
+            let h = 1.0 / ((N - 2) + (M - 2));
+
+            for (let j = 1; j < M - 1; j++) {
+                for (let i = 1; i < N - 1; i++) {
+                    div[IX(i, j)] = -0.5 * (
+                        u[IX(i + 1, j)] - u[IX(i - 1, j)] +
+                        v[IX(i, j + 1)] - v[IX(i, j - 1)]
+                    ) * h;
+                    p[IX(i, j)] = 0;
+                }
+            }
+            setBoundary(0, div);
+            setBoundary(0, p);
+
+            linearSolve(0, p, div, 1, 4);
+
+            for (let j = 1; j < M - 1; j++) {
+                for (let i = 1; i < N - 1; i++) {
+                    u[IX(i, j)] -= 0.5 * (p[IX(i + 1, j)] - p[IX(i - 1, j)]) / h;
+                    v[IX(i, j)] -= 0.5 * (p[IX(i, j + 1)] - p[IX(i, j - 1)]) / h;
+                }
+            }
+            setBoundary(1, u);
+            setBoundary(2, v);
+        }
+
+        // Boundary conditions
+        function setBoundary(b, x) {
+            for (let i = 1; i < N - 1; i++) {
+                x[IX(i, 0)] = b === 2 ? -x[IX(i, 1)] : x[IX(i, 1)];
+                x[IX(i, M - 1)] = b === 2 ? -x[IX(i, M - 2)] : x[IX(i, M - 2)];
+            }
+            for (let j = 1; j < M - 1; j++) {
+                x[IX(0, j)] = b === 1 ? -x[IX(1, j)] : x[IX(1, j)];
+                x[IX(N - 1, j)] = b === 1 ? -x[IX(N - 2, j)] : x[IX(N - 2, j)];
+            }
+            x[IX(0, 0)] = 0.5 * (x[IX(1, 0)] + x[IX(0, 1)]);
+            x[IX(0, M - 1)] = 0.5 * (x[IX(1, M - 1)] + x[IX(0, M - 2)]);
+            x[IX(N - 1, 0)] = 0.5 * (x[IX(N - 2, 0)] + x[IX(N - 1, 1)]);
+            x[IX(N - 1, M - 1)] = 0.5 * (x[IX(N - 2, M - 1)] + x[IX(N - 1, M - 2)]);
+        }
+
+        // Time step functions
+        function velocityStep(u, v, u_prev, v_prev, visc, dt) {
+            addSource(u, u_prev, dt);
+            addSource(v, v_prev, dt);
+
+            // Swap velocity arrays
+            [u_prev, u] = [u, u_prev];
+            [v_prev, v] = [v, v_prev];
+
+            diffuse(1, u, u_prev, visc, dt);
+            diffuse(2, v, v_prev, visc, dt);
+
+            project(u, v, u_prev, v_prev);
+
+            // Swap velocity arrays again
+            [u_prev, u] = [u, u_prev];
+            [v_prev, v] = [v, v_prev];
+
+            advect(1, u, u_prev, u_prev, v_prev, dt);
+            advect(2, v, v_prev, u_prev, v_prev, dt);
+
+            project(u, v, u_prev, v_prev);
+        }
+
+        function densityStep(x, x0, u, v, diff, dt) {
+            addSource(x, x0, dt);
+
+            // Swap density arrays
+            [x0, x] = [x, x0];
+
+            diffuse(0, x, x0, diff, dt);
+
+            // Swap density arrays again
+            [x0, x] = [x, x0];
+
+            advect(0, x, x0, u, v, dt);
+        }
+
+        // Main simulation variables
+        let dt = 0.1; // Initial time step
+        let isRunning = true;
+
+        // Canvas and context
+        let canvas = document.getElementById('canvas');
+        let ctx = canvas.getContext('2d', { willReadFrequently: true });
+        canvas.width = N;
+        canvas.height = M;
+
+        // Mouse interaction
+        let isMouseDown = false;
+        let mouseX = 0;
+        let mouseY = 0;
+        let lastMouseX = 0;
+        let lastMouseY = 0;
+
+        canvas.addEventListener('mousedown', function(e) {
+            isMouseDown = true;
+            updateMousePosition(e);
+        });
+
+        canvas.addEventListener('mouseup', function(e) {
+            isMouseDown = false;
+        });
+
+        canvas.addEventListener('mousemove', function(e) {
+            lastMouseX = mouseX;
+            lastMouseY = mouseY;
+            updateMousePosition(e);
+            if (isMouseDown) {
+                addDensityAtMouse();
+                addVelocityAtMouse();
+            }
+            updateDebugInfo();
+        });
+
+        function updateMousePosition(e) {
+            let rect = canvas.getBoundingClientRect();
+            let scaleX = N / rect.width;
+            let scaleY = M / rect.height;
+            mouseX = Math.floor((e.clientX - rect.left) * scaleX);
+            mouseY = Math.floor((e.clientY - rect.top) * scaleY);
+        }
+
+        function addDensityAtMouse() {
+            let radius = 2;
+            for (let j = -radius; j <= radius; j++) {
+                for (let i = -radius; i <= radius; i++) {
+                    let x = mouseX + i;
+                    let y = mouseY + j;
+                    if (x >= 0 && x < N && y >= 0 && y < M) {
+                        density_prev[IX(x, y)] += 50;
+                    }
+                }
+            }
+        }
+
+        function addVelocityAtMouse() {
+            let dx = mouseX - lastMouseX;
+            let dy = mouseY - lastMouseY;
+            let strength = 1;
+            let radius = 2;
+            for (let j = -radius; j <= radius; j++) {
+                for (let i = -radius; i <= radius; i++) {
+                    let x = mouseX + i;
+                    let y = mouseY + j;
+                    if (x >= 0 && x < N && y >= 0 && y < M) {
+                        u_prev[IX(x, y)] += dx * strength;
+                        v_prev[IX(x, y)] += dy * strength;
+                    }
+                }
+            }
+        }
+
+        // Debug information display
+        let densityDisplay = document.getElementById('densityValue');
+        let velocityXDisplay = document.getElementById('velocityX');
+        let velocityYDisplay = document.getElementById('velocityY');
+
+        function updateDebugInfo() {
+            let idx = IX(mouseX, mouseY);
+            let d = density[idx].toFixed(2);
+            let velX = u[idx].toFixed(2);
+            let velY = v[idx].toFixed(2);
+            densityDisplay.textContent = d;
+            velocityXDisplay.textContent = velX;
+            velocityYDisplay.textContent = velY;
+        }
+
+        // Simulation loop
+        function simulate() {
+            if (!isRunning) {
+                requestAnimationFrame(simulate);
+                return;
+            }
+
+            // Velocity step
+            velocityStep(u, v, u_prev, v_prev, 0.0001, dt);
+
+            // Density step
+            densityStep(density, density_prev, u, v, 0.0001, dt);
+
+            // Render the density field
+            renderDensity();
+
+            // Reset previous fields
+            u_prev.fill(0);
+            v_prev.fill(0);
+            density_prev.fill(0);
+
+            // Request the next frame
+            requestAnimationFrame(simulate);
+        }
+
+        // Rendering function
+        function renderDensity() {
+            let imageData = ctx.createImageData(N, M);
+            let data = imageData.data;
+            for (let j = 0; j < M; j++) {
+                for (let i = 0; i < N; i++) {
+                    let idx = IX(i, j);
+                    let d = density[idx];
+                    let color = Math.min(255, d * 5);
+                    let index = (i + j * N) * 4;
+                    data[index + 0] = color; // Red
+                    data[index + 1] = 0;     // Green
+                    data[index + 2] = 0;     // Blue
+                    data[index + 3] = 255;   // Alpha
+                }
+            }
+            ctx.putImageData(imageData, 0, 0);
+        }
+
+        // Delta T Slider
+        let dtSlider = document.getElementById('dtSlider');
+        let dtValueDisplay = document.getElementById('dtValue');
+
+        function updateDt() {
+            let dtSliderValue = parseFloat(dtSlider.value);
+            dt = 0.1 * dtSliderValue;
+            dtValueDisplay.textContent = dtSliderValue.toFixed(1);
+        }
+
+        dtSlider.addEventListener('input', updateDt);
+        updateDt(); // Initialize dt
+
+        // Start/Stop Button
+        let startStopBtn = document.getElementById('startStopBtn');
+        startStopBtn.addEventListener('click', function() {
+            isRunning = !isRunning;
+            startStopBtn.textContent = isRunning ? 'Pause' : 'Resume';
+            if (isRunning) {
+                simulate();
+            }
+        });
+
+        // Start the simulation
+        simulate();
+    </script>
+</body>
+</html>

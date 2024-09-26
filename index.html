@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Reversible Fluid Simulation</title>
+    <style>
+        canvas {
+            border: 1px solid black;
+            image-rendering: pixelated;
+            width: 512px;  /* Scaling up for better visibility */
+            height: 256px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <script>
+        // Define grid dimensions
+        const N = 128; // Width
+        const M = 64;  // Height
+
+        // Fixed-point scaling factor
+        const SCALE = 1 << 16; // 16-bit fractional part
+
+        // Initialize arrays for velocity and density
+        let u = new Int32Array(N * M);    // Velocity in x-direction
+        let v = new Int32Array(N * M);    // Velocity in y-direction
+        let u_prev = new Int32Array(N * M);
+        let v_prev = new Int32Array(N * M);
+        let density = new Int32Array(N * M);
+        let density_prev = new Int32Array(N * M);
+
+        // Indexing function
+        function IX(x, y) {
+            x = Math.max(0, Math.min(x, N - 1));
+            y = Math.max(0, Math.min(y, M - 1));
+            return x + y * N;
+        }
+
+        // Add source function
+        function addSource(x, s, dt) {
+            for (let i = 0; i < x.length; i++) {
+                x[i] += (s[i] * dt) / SCALE;
+            }
+        }
+
+        // Diffusion step
+        function diffuse(b, x, x0, diff, dt) {
+            let a = ((dt * diff * (N - 2) * (M - 2)) / SCALE);
+            linearSolve(b, x, x0, a, 1 + 4 * a);
+        }
+
+        // Linear solver
+        function linearSolve(b, x, x0, a, c) {
+            for (let k = 0; k < 20; k++) {
+                for (let j = 1; j < M - 1; j++) {
+                    for (let i = 1; i < N - 1; i++) {
+                        x[IX(i, j)] = ((x0[IX(i, j)] + a * (
+                            x[IX(i - 1, j)] +
+                            x[IX(i + 1, j)] +
+                            x[IX(i, j - 1)] +
+                            x[IX(i, j + 1)]
+                        )) / c) | 0; // Ensure integer division
+                    }
+                }
+                setBoundary(b, x);
+            }
+        }
+
+        // Advection step
+        function advect(b, d, d0, u, v, dt) {
+            let dt0_x = (dt * (N - 2)) / SCALE;
+            let dt0_y = (dt * (M - 2)) / SCALE;
+
+            for (let j = 1; j < M - 1; j++) {
+                for (let i = 1; i < N - 1; i++) {
+                    let x = i * SCALE - dt0_x * u[IX(i, j)];
+                    let y = j * SCALE - dt0_y * v[IX(i, j)];
+
+                    if (x < SCALE) x = SCALE;
+                    if (x > (N - 2) * SCALE) x = (N - 2) * SCALE;
+                    if (y < SCALE) y = SCALE;
+                    if (y > (M - 2) * SCALE) y = (M - 2) * SCALE;
+
+                    let i0 = (x / SCALE) | 0;
+                    let i1 = i0 + 1;
+                    let j0 = (y / SCALE) | 0;
+                    let j1 = j0 + 1;
+
+                    let s1 = x - i0 * SCALE;
+                    let s0 = SCALE - s1;
+                    let t1 = y - j0 * SCALE;
+                    let t0 = SCALE - t1;
+
+                    d[IX(i, j)] = (
+                        s0 * (t0 * d0[IX(i0, j0)] + t1 * d0[IX(i0, j1)]) +
+                        s1 * (t0 * d0[IX(i1, j0)] + t1 * d0[IX(i1, j1)])
+                    ) / (SCALE * SCALE);
+                }
+            }
+            setBoundary(b, d);
+        }
+
+        // Projection step
+        function project(u, v, p, div) {
+            let h = SCALE / ((N - 2) + (M - 2));
+
+            for (let j = 1; j < M - 1; j++) {
+                for (let i = 1; i < N - 1; i++) {
+                    div[IX(i, j)] = -(
+                        (u[IX(i + 1, j)] - u[IX(i - 1, j)] +
+                         v[IX(i, j + 1)] - v[IX(i, j - 1)])
+                    ) / (2 * h);
+                    p[IX(i, j)] = 0;
+                }
+            }
+            setBoundary(0, div);
+            setBoundary(0, p);
+
+            linearSolve(0, p, div, 1, 4);
+
+            for (let j = 1; j < M - 1; j++) {
+                for (let i = 1; i < N - 1; i++) {
+                    u[IX(i, j)] -= (SCALE * (p[IX(i + 1, j)] - p[IX(i - 1, j)])) / (2 * h);
+                    v[IX(i, j)] -= (SCALE * (p[IX(i, j + 1)] - p[IX(i, j - 1)])) / (2 * h);
+                }
+            }
+            setBoundary(1, u);
+            setBoundary(2, v);
+        }
+
+        // Boundary conditions
+        function setBoundary(b, x) {
+            for (let i = 1; i < N - 1; i++) {
+                x[IX(i, 0)] = b === 2 ? -x[IX(i, 1)] : x[IX(i, 1)];
+                x[IX(i, M - 1)] = b === 2 ? -x[IX(i, M - 2)] : x[IX(i, M - 2)];
+            }
+            for (let j = 1; j < M - 1; j++) {
+                x[IX(0, j)] = b === 1 ? -x[IX(1, j)] : x[IX(1, j)];
+                x[IX(N - 1, j)] = b === 1 ? -x[IX(N - 2, j)] : x[IX(N - 2, j)];
+            }
+            x[IX(0, 0)] = 0.5 * (x[IX(1, 0)] + x[IX(0, 1)]);
+            x[IX(0, M - 1)] = 0.5 * (x[IX(1, M - 1)] + x[IX(0, M - 2)]);
+            x[IX(N - 1, 0)] = 0.5 * (x[IX(N - 2, 0)] + x[IX(N - 1, 1)]);
+            x[IX(N - 1, M - 1)] = 0.5 * (x[IX(N - 2, M - 1)] + x[IX(N - 1, M - 2)]);
+        }
+
+        // Time step functions
+        function velocityStep(u, v, u_prev, v_prev, visc, dt) {
+            addSource(u, u_prev, dt);
+            addSource(v, v_prev, dt);
+
+            // Swap velocity arrays
+            [u_prev, u] = [u, u_prev];
+            [v_prev, v] = [v, v_prev];
+
+            diffuse(1, u, u_prev, visc, dt);
+            diffuse(2, v, v_prev, visc, dt);
+
+            project(u, v, u_prev, v_prev);
+
+            // Swap velocity arrays again
+            [u_prev, u] = [u, u_prev];
+            [v_prev, v] = [v, v_prev];
+
+            advect(1, u, u_prev, u_prev, v_prev, dt);
+            advect(2, v, v_prev, u_prev, v_prev, dt);
+
+            project(u, v, u_prev, v_prev);
+        }
+
+        function densityStep(x, x0, u, v, diff, dt) {
+            addSource(x, x0, dt);
+
+            // Swap density arrays
+            [x0, x] = [x, x0];
+
+            diffuse(0, x, x0, diff, dt);
+
+            // Swap density arrays again
+            [x0, x] = [x, x0];
+
+            advect(0, x, x0, u, v, dt);
+        }
+
+        // Main simulation loop
+        let dt = SCALE / 10; // Time step
+        let frameCount = 0;
+
+        function simulate() {
+            frameCount++;
+            if (frameCount % 500 === 0) {
+                dt = -dt; // Reverse time
+            }
+
+            // Clear previous forces
+            for (let i = 0; i < N * M; i++) {
+                u_prev[i] = 0;
+                v_prev[i] = 0;
+                density_prev[i] = 0;
+            }
+
+            // Add density at the center
+            density_prev[IX(Math.floor(N / 2), Math.floor(M / 2))] = SCALE * 1000;
+
+            // Velocity step
+            velocityStep(u, v, u_prev, v_prev, 0, dt);
+
+            // Density step
+            densityStep(density, density_prev, u, v, 0, dt);
+
+            // Render the density field
+            renderDensity();
+
+            // Request the next frame
+            requestAnimationFrame(simulate);
+        }
+
+        // Rendering function
+        let canvas = document.getElementById('canvas');
+        let ctx = canvas.getContext('2d');
+        canvas.width = N;
+        canvas.height = M;
+
+        function renderDensity() {
+            let imageData = ctx.createImageData(N, M);
+            for (let j = 0; j < M; j++) {
+                for (let i = 0; i < N; i++) {
+                    let d = density[IX(i, j)] / SCALE;
+                    let color = Math.min(255, Math.abs(d) | 0);
+                    let index = (i + j * N) * 4;
+                    imageData.data[index + 0] = color; // Red
+                    imageData.data[index + 1] = color; // Green
+                    imageData.data[index + 2] = color; // Blue
+                    imageData.data[index + 3] = 255;   // Alpha
+                }
+            }
+            ctx.putImageData(imageData, 0, 0);
+        }
+
+        // Start the simulation
+        simulate();
+    </script>
+</body>
+</html>
