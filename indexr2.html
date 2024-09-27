@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Reversible Fluid Simulation with Enhanced Features</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        #controls {
+            margin-bottom: 10px;
+        }
+        #canvas {
+            border: 1px solid black;
+            image-rendering: pixelated;
+            width: 512px;  /* Scaling up for better visibility */
+            height: 256px;
+        }
+        #debugInfo {
+            margin-top: 10px;
+        }
+        label {
+            margin-right: 10px;
+        }
+        .control-group {
+            margin-bottom: 5px;
+        }
+        button {
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <!-- Existing controls -->
+        <div class="control-group">
+            <label for="dtSlider">Time Step (Δt):</label>
+            <input type="range" id="dtSlider" min="0.01" max="1" value="0.1" step="0.01">
+            <span id="dtValue">0.10</span>
+        </div>
+        <div class="control-group">
+            <label for="viscositySlider">Viscosity:</label>
+            <input type="range" id="viscositySlider" min="0" max="0.1" value="0" step="0.005">
+            <span id="viscosityValue">0.000</span>
+        </div>
+        <div class="control-group">
+            <label for="vorticityCheckbox">Vorticity Confinement:</label>
+            <input type="checkbox" id="vorticityCheckbox" checked>
+        </div>
+        <div class="control-group">
+            <label for="fluidColor">Fluid Color:</label>
+            <input type="color" id="fluidColor" value="#00aaff">
+        </div>
+        <div class="control-group">
+            <label for="fluidBrushSize">Fluid Brush Size:</label>
+            <input type="range" id="fluidBrushSize" min="1" max="10" value="3" step="1">
+            <span id="fluidBrushSizeValue">3</span>
+        </div>
+        <div class="control-group">
+            <label for="obstacleBrushSize">Obstacle Brush Size:</label>
+            <input type="range" id="obstacleBrushSize" min="1" max="10" value="3" step="1">
+            <span id="obstacleBrushSizeValue">3</span>
+        </div>
+        <div class="control-group">
+            <button id="startStopBtn">Pause</button>
+            <button id="reverseBtn">Reverse</button>
+            <button id="resetBtn">Reset</button>
+        </div>
+    </div>
+    <canvas id="canvas"></canvas>
+    <div id="debugInfo">Density: 0.00, Velocity: (0.00, 0.00), Pressure: 0.00, Obstacle: No</div>
+
+    <script>
+        // Grid dimensions
+        const N = 64; // Width
+        const M = 64;  // Height
+        const size = N * M;
+
+        // Arrays for state variables
+        let u = new Float32Array(size);
+        let v = new Float32Array(size);
+        let u_prev = new Float32Array(size);
+        let v_prev = new Float32Array(size);
+        let density = new Float32Array(size);
+        let density_prev = new Float32Array(size);
+
+        // Pressure and divergence arrays for debugging
+        let pressure = new Float32Array(size);
+        let div = new Float32Array(size);
+
+        // Obstacles array (0: fluid cell, 1: obstacle)
+        let obstacles = new Uint8Array(size);
+
+        // Time step
+        let dt = 0.1; // Default time step
+
+        // Viscosity and diffusion
+        let viscosity = 0.0; // Adjusted via slider
+        let diffusion = 0.0; // Keep diffusion at zero for reversibility
+
+        // Vorticity confinement toggle
+        let vorticityConfinementEnabled = true;
+
+        // Simulation control variables
+        let isRunning = true;
+        let isReversing = false;
+
+        // Canvas and context
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = N;
+        canvas.height = M;
+
+        // Fluid color
+        let fluidColor = '#00aaff';
+
+        // Brush sizes
+        let fluidBrushSize = 3;
+        let obstacleBrushSize = 3;
+
+        // Indexing function
+        function IX(x, y) {
+            x = Math.max(0, Math.min(x, N - 1));
+            y = Math.max(0, Math.min(y, M - 1));
+            return x + y * N;
+        }
+
+        /**
+         * Adds source values to the field x.
+         * @param {Float32Array} x - Field to be updated.
+         * @param {Float32Array} s - Source field.
+         * @param {number} dt - Time step.
+         */
+        function addSource(x, s, dt) {
+            for (let i = 0; i < size; i++) {
+                x[i] += s[i] * dt;
+            }
+        }
+
+        /**
+         * Sets boundary conditions for field x.
+         * @param {number} b - Boundary type (0: scalar field, 1: horizontal velocity, 2: vertical velocity).
+         * @param {Float32Array} x - Field to set boundary conditions on.
+         */
+        function setBoundary(b, x) {
+            for (let i = 1; i < N - 1; i++) {
+                x[IX(i, 0)] = b === 2 ? -x[IX(i, 1)] : x[IX(i, 1)];
+                x[IX(i, M - 1)] = b === 2 ? -x[IX(i, M - 2)] : x[IX(i, M - 2)];
+            }
+            for (let j = 1; j < M - 1; j++) {
+                x[IX(0, j)] = b === 1 ? -x[IX(1, j)] : x[IX(1, j)];
+                x[IX(N - 1, j)] = b === 1 ? -x[IX(N - 2, j)] : x[IX(N - 2, j)];
+            }
+            x[IX(0, 0)] = 0.5 * (x[IX(1, 0)] + x[IX(0, 1)]);
+            x[IX(0, M - 1)] = 0.5 * (x[IX(1, M - 1)] + x[IX(0, M - 2)]);
+            x[IX(N - 1, 0)] = 0.5 * (x[IX(N - 2, 0)] + x[IX(N - 1, 1)]);
+            x[IX(N - 1, M - 1)] = 0.5 * (x[IX(N - 2, M - 1)] + x[IX(N - 1, M - 2)]);
+
+            // Set velocities inside obstacles to zero
+            for (let j = 0; j < M; j++) {
+                for (let i = 0; i < N; i++) {
+                    let idx = IX(i, j);
+                    if (obstacles[idx]) {
+                        x[idx] = 0;
+                    }
+                }
+            }
+        }
+
+        /**
+         * Solves a linear system using Gauss-Seidel relaxation.
+         * @param {number} b - Boundary type.
+         * @param {Float32Array} x - Field to be solved.
+         * @param {Float32Array} x0 - Source field.
+         * @param {number} a - Coefficient.
+         * @param {number} c - Coefficient.
+         */
+        function linearSolve(b, x, x0, a, c) {
+            for (let k = 0; k < 20; k++) {
+                for (let j = 1; j < M - 1; j++) {
+                    for (let i = 1; i < N - 1; i++) {
+                        let idx = IX(i, j);
+
+                        if (obstacles[idx]) continue; // Skip obstacle cells
+
+                        x[idx] = (x0[idx] + a * (
+                            x[IX(i - 1, j)] + x[IX(i + 1, j)] +
+                            x[IX(i, j - 1)] + x[IX(i, j + 1)]
+                        )) / c;
+                    }
+                }
+                setBoundary(b, x);
+            }
+        }
+
+        /**
+         * Diffusion step.
+         * @param {number} b - Boundary type.
+         * @param {Float32Array} x - Field to be updated.
+         * @param {Float32Array} x0 - Source field.
+         * @param {number} diff - Diffusion rate.
+         * @param {number} dt - Time step.
+         */
+        function diffuse(b, x, x0, diff, dt) {
+            if (diff === 0) {
+                for (let i = 0; i < size; i++) {
+                    x[i] = x0[i];
+                }
+                return;
+            }
+            let a = dt * diff * (N - 2) * (M - 2);
+            linearSolve(b, x, x0, a, 1 + 4 * a);
+        }
+
+        /**
+         * Advection step with obstacle handling.
+         * @param {number} b - Boundary type.
+         * @param {Float32Array} d - Field to be updated.
+         * @param {Float32Array} d0 - Source field.
+         * @param {Float32Array} u - Horizontal velocity field.
+         * @param {Float32Array} v - Vertical velocity field.
+         * @param {number} dt - Time step.
+         */
+        function advect(b, d, d0, u, v, dt) {
+            let dt0_x = dt * (N - 2);
+            let dt0_y = dt * (M - 2);
+
+            for (let j = 1; j < M - 1; j++) {
+                for (let i = 1; i < N - 1; i++) {
+                    let idx = IX(i, j);
+
+                    if (obstacles[idx]) {
+                        d[idx] = d0[idx]; // Keep obstacle cells unchanged
+                        continue;
+                    }
+
+                    // Backtrace particle position
+                    let x = i - dt0_x * u[idx];
+                    let y = j - dt0_y * v[idx];
+
+                    // Handle boundaries
+                    if (x < 0.5) x = 0.5;
+                    if (x > N - 1.5) x = N - 1.5;
+                    if (y < 0.5) y = 0.5;
+                    if (y > M - 1.5) y = M - 1.5;
+
+                    let i0 = Math.floor(x);
+                    let i1 = i0 + 1;
+                    let j0 = Math.floor(y);
+                    let j1 = j0 + 1;
+
+                    let s1 = x - i0;
+                    let s0 = 1 - s1;
+                    let t1 = y - j0;
+                    let t0 = 1 - t1;
+
+                    // Interpolate
+                    let idx_i0j0 = IX(i0, j0);
+                    let idx_i0j1 = IX(i0, j1);
+                    let idx_i1j0 = IX(i1, j0);
+                    let idx_i1j1 = IX(i1, j1);
+
+                    // Handle obstacles in interpolation
+                    let d_i0j0 = obstacles[idx_i0j0] ? d0[idx] : d0[idx_i0j0];
+                    let d_i0j1 = obstacles[idx_i0j1] ? d0[idx] : d0[idx_i0j1];
+                    let d_i1j0 = obstacles[idx_i1j0] ? d0[idx] : d0[idx_i1j0];
+                    let d_i1j1 = obstacles[idx_i1j1] ? d0[idx] : d0[idx_i1j1];
+
+                    d[idx] = s0 * (t0 * d_i0j0 + t1 * d_i0j1) +
+                             s1 * (t0 * d_i1j0 + t1 * d_i1j1);
+                }
+            }
+            setBoundary(b, d);
+        }
+
+        /**
+         * Projection step to make the velocity field divergence-free.
+         * @param {Float32Array} u - Horizontal velocity field.
+         * @param {Float32Array} v - Vertical velocity field.
+         * @param {Float32Array} p - Pressure field.
+         * @param {Float32Array} div - Divergence field.
+         */
+        function project(u, v, p, div) {
+            let h = 1.0 / Math.max(N - 2, M - 2);
+
+            for (let j = 1; j < M - 1; j++) {
+                for (let i = 1; i < N - 1; i++) {
+                    let idx = IX(i, j);
+
+                    if (obstacles[idx]) {
+                        div[idx] = 0;
+                        p[idx] = 0;
+                        continue;
+                    }
+
+                    div[idx] = -0.5 * h * (u[IX(i + 1, j)] - u[IX(i - 1, j)] +
+                                           v[IX(i, j + 1)] - v[IX(i, j - 1)]);
+                    p[idx] = 0;
+                }
+            }
+            setBoundary(0, div);
+            setBoundary(0, p);
+
+            linearSolve(0, p, div, 1, 4);
+
+            for (let j = 1; j < M - 1; j++) {
+                for (let i = 1; i < N - 1; i++) {
+                    let idx = IX(i, j);
+
+                    if (obstacles[idx]) {
+                        u[idx] = 0;
+                        v[idx] = 0;
+                        continue;
+                    }
+
+                    u[idx] -= 0.5 * (p[IX(i + 1, j)] - p[IX(i - 1, j)]) / h;
+                    v[idx] -= 0.5 * (p[IX(i, j + 1)] - p[IX(i, j - 1)]) / h;
+                }
+            }
+            setBoundary(1, u);
+            setBoundary(2, v);
+
+            // Store pressure for debugging
+            for (let i = 0; i < size; i++) {
+                pressure[i] = p[i];
+            }
+        }
+
+        /**
+         * Vorticity confinement to enhance rotational features.
+         * @param {Float32Array} u - Horizontal velocity field.
+         * @param {Float32Array} v - Vertical velocity field.
+         * @param {number} dt - Time step.
+         */
+        function vorticityConfinement(u, v, dt) {
+            if (!vorticityConfinementEnabled) return;
+
+            let omega = new Float32Array(size);
+            let absOmega = new Float32Array(size);
+
+            // Calculate vorticity
+            for (let j = 1; j < M - 1; j++) {
+                for (let i = 1; i < N - 1; i++) {
+                    let idx = IX(i, j);
+
+                    if (obstacles[idx]) continue;
+
+                    let du_dy = (u[IX(i, j + 1)] - u[IX(i, j - 1)]) * 0.5;
+                    let dv_dx = (v[IX(i + 1, j)] - v[IX(i - 1, j)]) * 0.5;
+                    omega[idx] = dv_dx - du_dy;
+                    absOmega[idx] = Math.abs(omega[idx]);
+                }
+            }
+
+            // Compute gradient of the magnitude of vorticity
+            for (let j = 2; j < M - 2; j++) {
+                for (let i = 2; i < N - 2; i++) {
+                    let idx = IX(i, j);
+
+                    if (obstacles[idx]) continue;
+
+                    let dw_dx = (absOmega[IX(i + 1, j)] - absOmega[IX(i - 1, j)]) * 0.5;
+                    let dw_dy = (absOmega[IX(i, j + 1)] - absOmega[IX(i, j - 1)]) * 0.5;
+
+                    // Compute length of gradient
+                    let length = Math.sqrt(dw_dx * dw_dx + dw_dy * dw_dy) + 1e-6;
+
+                    // Normalize gradient
+                    let nx = dw_dx / length;
+                    let ny = dw_dy / length;
+
+                    // Add vorticity confinement force
+                    let force = 5.0; // Adjust the strength as needed
+                    u[idx] += dt * force * (ny * omega[idx]);
+                    v[idx] -= dt * force * (nx * omega[idx]);
+                }
+            }
+            // Reapply boundary conditions
+            setBoundary(1, u);
+            setBoundary(2, v);
+        }
+
+        /**
+         * Performs a single time step for the velocity fields.
+         * @param {Float32Array} u - Horizontal velocity field.
+         * @param {Float32Array} v - Vertical velocity field.
+         * @param {Float32Array} u_prev - Previous horizontal velocity field.
+         * @param {Float32Array} v_prev - Previous vertical velocity field.
+         * @param {number} dt - Time step.
+         */
+        function velocityStep(u, v, u_prev, v_prev, dt) {
+            addSource(u, u_prev, dt);
+            addSource(v, v_prev, dt);
+
+            // Swap velocity fields
+            [u_prev, u] = [u, u_prev];
+            [v_prev, v] = [v, v_prev];
+
+            diffuse(1, u, u_prev, viscosity, dt);
+            diffuse(2, v, v_prev, viscosity, dt);
+
+            project(u, v, u_prev, v_prev);
+
+            // Swap velocity fields again
+            [u_prev, u] = [u, u_prev];
+            [v_prev, v] = [v, v_prev];
+
+            advect(1, u, u_prev, u_prev, v_prev, dt);
+            advect(2, v, v_prev, u_prev, v_prev, dt);
+
+            if (vorticityConfinementEnabled) {
+                vorticityConfinement(u, v, dt);
+            }
+
+            project(u, v, u_prev, v_prev);
+        }
+
+        /**
+         * Performs a single time step for the density field.
+         * @param {Float32Array} x - Density field.
+         * @param {Float32Array} x0 - Previous density field.
+         * @param {Float32Array} u - Horizontal velocity field.
+         * @param {Float32Array} v - Vertical velocity field.
+         * @param {number} dt - Time step.
+         */
+        function densityStep(x, x0, u, v, dt) {
+            addSource(x, x0, dt);
+
+            // Swap density fields
+            [x0, x] = [x, x0];
+
+            diffuse(0, x, x0, diffusion, dt);
+
+            // Swap density fields again
+            [x0, x] = [x, x0];
+
+            advect(0, x, x0, u, v, dt);
+        }
+
+        // Mouse interaction
+        let isMouseDown = false;
+        let mouseX = 0;
+        let mouseY = 0;
+        let isRightMouse = false;
+
+        canvas.addEventListener('mousedown', function(e) {
+            isMouseDown = true;
+            isRightMouse = e.button === 2;
+            updateMousePosition(e);
+            if (isRightMouse) {
+                addObstacleAtMouse();
+            } else {
+                addDensityAtMouse();
+            }
+        });
+
+        canvas.addEventListener('mouseup', function(e) {
+            isMouseDown = false;
+        });
+
+        canvas.addEventListener('mousemove', function(e) {
+            updateMousePosition(e);
+            if (isMouseDown) {
+                if (isRightMouse) {
+                    addObstacleAtMouse();
+                } else {
+                    addDensityAtMouse();
+                }
+            }
+            updateDebugInfo();
+        });
+
+        // Disable context menu on canvas to allow right-click
+        canvas.addEventListener('contextmenu', function(e) {
+            e.preventDefault();
+        });
+
+        function updateMousePosition(e) {
+            let rect = canvas.getBoundingClientRect();
+            let scaleX = N / rect.width;
+            let scaleY = M / rect.height;
+            mouseX = Math.floor((e.clientX - rect.left) * scaleX);
+            mouseY = Math.floor((e.clientY - rect.top) * scaleY);
+        }
+
+        // Modify addDensityAtMouse() to add initial velocities
+        function addDensityAtMouse() {
+            let radius = fluidBrushSize;
+            for (let j = -radius; j <= radius; j++) {
+                for (let i = -radius; i <= radius; i++) {
+                    let x = mouseX + i;
+                    let y = mouseY + j;
+                    if (x >= 0 && x < N && y >= 0 && y < M && !obstacles[IX(x, y)]) {
+                        density_prev[IX(x, y)] = 100;
+                        // Add initial upward velocity
+                        v_prev[IX(x, y)] = 1500; // Adjust the value as needed
+                
+
+				}
+                }
+            }
+        }
+
+        function addObstacleAtMouse() {
+            let radius = obstacleBrushSize;
+            for (let j = -radius; j <= radius; j++) {
+                for (let i = -radius; i <= radius; i++) {
+                    let x = mouseX + i;
+                    let y = mouseY + j;
+                    if (x >= 0 && x < N && y >= 0 && y < M) {
+                        obstacles[IX(x, y)] = 1;
+                        u[IX(x, y)] = 0;
+                        v[IX(x, y)] = 0;
+                    }
+                }
+            }
+        }
+
+        // Simulation loop
+        function simulate() {
+            if (!isRunning) {
+                requestAnimationFrame(simulate);
+                return;
+            }
+
+            // Clear previous forces
+            u_prev.fill(0);
+            v_prev.fill(0);
+
+            // Reverse velocities if reversing
+            let actual_dt = dt;
+            if (isReversing) {
+                actual_dt = -dt;
+            }
+
+            // Velocity step
+            velocityStep(u, v, u_prev, v_prev, actual_dt);
+
+            // Density step
+            densityStep(density, density_prev, u, v, actual_dt);
+
+            // Render the density field
+            renderDensity();
+
+            // Update debug information
+            updateDebugInfo();
+
+            // Reset density_prev
+            density_prev.fill(0);
+
+            // Request the next frame
+            requestAnimationFrame(simulate);
+        }
+
+        /**
+         * Renders the density field onto the canvas.
+         */
+        function renderDensity() {
+            let imageData = ctx.createImageData(N, M);
+            let data = imageData.data;
+
+            let fluidColorRGB = hexToRGB(fluidColor);
+
+            for (let j = 0; j < M; j++) {
+                for (let i = 0; i < N; i++) {
+                    let idx = IX(i, j);
+                    let d = density[idx];
+                    let index = (i + j * N) * 4;
+
+                    if (obstacles[idx]) {
+                        // Render obstacles in white
+                        data[index + 0] = 255;
+                        data[index + 1] = 255;
+                        data[index + 2] = 255;
+                    } else {
+                        // Render fluid density
+                        let alpha = Math.min(1, d / 100);
+                        data[index + 0] = fluidColorRGB.r * alpha;
+                        data[index + 1] = fluidColorRGB.g * alpha;
+                        data[index + 2] = fluidColorRGB.b * alpha;
+                    }
+                    data[index + 3] = 255;   // Alpha
+                }
+            }
+            ctx.putImageData(imageData, 0, 0);
+        }
+
+        function hexToRGB(hex) {
+            let bigint = parseInt(hex.substring(1), 16);
+            let r = (bigint >> 16) & 255;
+            let g = (bigint >> 8) & 255;
+            let b = bigint & 255;
+            return { r: r, g: g, b: b };
+        }
+
+        // Delta T Slider
+        const dtSlider = document.getElementById('dtSlider');
+        const dtValueDisplay = document.getElementById('dtValue');
+
+        function updateDt() {
+            dt = parseFloat(dtSlider.value);
+            dtValueDisplay.textContent = dt.toFixed(2);
+        }
+
+        dtSlider.addEventListener('input', updateDt);
+        updateDt(); // Initialize dt
+
+        // Viscosity Slider
+        const viscositySlider = document.getElementById('viscositySlider');
+        const viscosityValueDisplay = document.getElementById('viscosityValue');
+
+        function updateViscosity() {
+            viscosity = parseFloat(viscositySlider.value);
+            viscosityValueDisplay.textContent = viscosity.toFixed(3);
+        }
+
+        viscositySlider.addEventListener('input', updateViscosity);
+        updateViscosity(); // Initialize viscosity
+
+        // Vorticity Confinement Checkbox
+        const vorticityCheckbox = document.getElementById('vorticityCheckbox');
+        vorticityCheckbox.addEventListener('change', function () {
+            vorticityConfinementEnabled = vorticityCheckbox.checked;
+        });
+
+        // Fluid Color Picker
+        const fluidColorPicker = document.getElementById('fluidColor');
+        fluidColorPicker.addEventListener('input', function () {
+            fluidColor = fluidColorPicker.value;
+        });
+
+        // Brush Size Sliders
+        const fluidBrushSizeSlider = document.getElementById('fluidBrushSize');
+        const fluidBrushSizeValue = document.getElementById('fluidBrushSizeValue');
+        fluidBrushSizeSlider.addEventListener('input', function () {
+            fluidBrushSize = parseInt(fluidBrushSizeSlider.value);
+            fluidBrushSizeValue.textContent = fluidBrushSize;
+        });
+
+        const obstacleBrushSizeSlider = document.getElementById('obstacleBrushSize');
+        const obstacleBrushSizeValue = document.getElementById('obstacleBrushSizeValue');
+        obstacleBrushSizeSlider.addEventListener('input', function () {
+            obstacleBrushSize = parseInt(obstacleBrushSizeSlider.value);
+            obstacleBrushSizeValue.textContent = obstacleBrushSize;
+        });
+
+        // Start/Stop Button
+        const startStopBtn = document.getElementById('startStopBtn');
+        startStopBtn.addEventListener('click', function () {
+            isRunning = !isRunning;
+            startStopBtn.textContent = isRunning ? 'Pause' : 'Resume';
+            if (isRunning) {
+                simulate();
+            }
+        });
+
+        // Reverse Button
+        const reverseBtn = document.getElementById('reverseBtn');
+        reverseBtn.addEventListener('click', function () {
+            isReversing = !isReversing;
+            reverseBtn.textContent = isReversing ? 'Forward' : 'Reverse';
+        });
+
+        // Reset Button
+        const resetBtn = document.getElementById('resetBtn');
+        resetBtn.addEventListener('click', resetSimulation);
+
+        function resetSimulation() {
+            u.fill(0);
+            v.fill(0);
+            u_prev.fill(0);
+            v_prev.fill(0);
+            density.fill(0);
+            density_prev.fill(0);
+            pressure.fill(0);
+            div.fill(0);
+         //   obstacles.fill(0);
+        }
+
+        // Debug Information
+        const debugInfo = document.getElementById('debugInfo');
+
+        function updateDebugInfo() {
+            let idx = IX(mouseX, mouseY);
+            let d = density[idx];
+            let u_val = u[idx];
+            let v_val = v[idx];
+            let p_val = pressure[idx];
+            let isObstacle = obstacles[idx] ? 'Yes' : 'No';
+
+            debugInfo.textContent = `Density: ${d.toFixed(2)}, Velocity: (${u_val.toFixed(2)}, ${v_val.toFixed(2)}), Pressure: ${p_val.toFixed(2)}, Obstacle: ${isObstacle}`;
+        }
+
+        // Start the simulation
+        simulate();
+
+    </script>
+</body>
+</html>
