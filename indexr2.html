@@ -68,11 +68,11 @@
         </div>
     </div>
     <canvas id="canvas"></canvas>
-    <div id="debugInfo">Density: 0.00, Velocity: (0.00, 0.00), Pressure: 0.00, Obstacle: No</div>
+    <div id="debugInfo">Density: 0.00, Velocity: (0.00, 0.00), Pressure: 0.00, Obstacle: No</div>Them. And then see what happens.
 
     <script>
         // Grid dimensions
-        const N = 64; // Width
+        const N = 128; // Width
         const M = 64;  // Height
         const size = N * M;
 
@@ -388,32 +388,32 @@
          * @param {Float32Array} v_prev - Previous vertical velocity field.
          * @param {number} dt - Time step.
          */
-        function velocityStep(u, v, u_prev, v_prev, dt) {
-            addSource(u, u_prev, dt);
-            addSource(v, v_prev, dt);
+         function velocityStep(u, v, u_prev, v_prev, dt) {
+    // Add source
+    addSource(u, u_prev, dt);
+    addSource(v, v_prev, dt);
 
-            // Swap velocity fields
-            [u_prev, u] = [u, u_prev];
-            [v_prev, v] = [v, v_prev];
+    // Diffusion step
+    diffuse(1, u_prev, u, viscosity, dt);
+    diffuse(2, v_prev, v, viscosity, dt);
 
-            diffuse(1, u, u_prev, viscosity, dt);
-            diffuse(2, v, v_prev, viscosity, dt);
+    // Projection step
+    project(u_prev, v_prev, u, v);
 
-            project(u, v, u_prev, v_prev);
+    // Advection step
+    advect(1, u, u_prev, u_prev, v_prev, dt);
+    advect(2, v, v_prev, u_prev, v_prev, dt);
 
-            // Swap velocity fields again
-            [u_prev, u] = [u, u_prev];
-            [v_prev, v] = [v, v_prev];
+    // Vorticity Confinement
+    if (vorticityConfinementEnabled) {
+        vorticityConfinement(u, v, dt);
+    }
 
-            advect(1, u, u_prev, u_prev, v_prev, dt);
-            advect(2, v, v_prev, u_prev, v_prev, dt);
+    // Final projection
+    project(u, v, u_prev, v_prev);
+}
 
-            if (vorticityConfinementEnabled) {
-                vorticityConfinement(u, v, dt);
-            }
 
-            project(u, v, u_prev, v_prev);
-        }
 
         /**
          * Performs a single time step for the density field.
@@ -423,19 +423,17 @@
          * @param {Float32Array} v - Vertical velocity field.
          * @param {number} dt - Time step.
          */
-        function densityStep(x, x0, u, v, dt) {
-            addSource(x, x0, dt);
+  //      function densityStep(x, x0, u, v, dt) {
+    function densityStep(density, density_prev, u, v, dt) {
+    // Add source
+    addSource(density, density_prev, dt);
 
-            // Swap density fields
-            [x0, x] = [x, x0];
+    // Diffusion step
+    diffuse(0, density_prev, density, diffusion, dt);
 
-            diffuse(0, x, x0, diffusion, dt);
-
-            // Swap density fields again
-            [x0, x] = [x, x0];
-
-            advect(0, x, x0, u, v, dt);
-        }
+    // Advection step
+    advect(0, density, density_prev, u, v, dt);
+}
 
         // Mouse interaction
         let isMouseDown = false;
@@ -491,9 +489,9 @@
                     let x = mouseX + i;
                     let y = mouseY + j;
                     if (x >= 0 && x < N && y >= 0 && y < M && !obstacles[IX(x, y)]) {
-                        density_prev[IX(x, y)] = 100;
+                        density_prev[IX(x, y)] = 200;
                         // Add initial upward velocity
-                        v_prev[IX(x, y)] = 1500; // Adjust the value as needed
+                       v_prev[IX(x, y)] = -50; // Adjust the value as needed
                 
 
 				}
@@ -517,40 +515,39 @@
         }
 
         // Simulation loop
-        function simulate() {
-            if (!isRunning) {
-                requestAnimationFrame(simulate);
-                return;
-            }
+     function simulate() {
+    if (!isRunning) {
+        requestAnimationFrame(simulate);
+        return;
+    }
 
-            // Clear previous forces
-            u_prev.fill(0);
-            v_prev.fill(0);
+    // Reverse velocities if reversing
+    let actual_dt = isReversing ? -dt : dt;
 
-            // Reverse velocities if reversing
-            let actual_dt = dt;
-            if (isReversing) {
-                actual_dt = -dt;
-            }
+    // Velocity step
+    velocityStep(u, v, u_prev, v_prev, actual_dt);
 
-            // Velocity step
-            velocityStep(u, v, u_prev, v_prev, actual_dt);
+    // Density step
+    densityStep(density, density_prev, u, v, actual_dt);
 
-            // Density step
-            densityStep(density, density_prev, u, v, actual_dt);
+    // Render the density field
+    renderDensity();
 
-            // Render the density field
-            renderDensity();
+    // Update debug information
+    updateDebugInfo();
 
-            // Update debug information
-            updateDebugInfo();
+   
 
-            // Reset density_prev
-            density_prev.fill(0);
+    // Request the next frame
+    requestAnimationFrame(simulate); // Reset previous arrays
+    u_prev.fill(0);
+    v_prev.fill(0);
+    density_prev.fill(0);
 
-            // Request the next frame
-            requestAnimationFrame(simulate);
-        }
+
+
+}
+
 
         /**
          * Renders the density field onto the canvas.
