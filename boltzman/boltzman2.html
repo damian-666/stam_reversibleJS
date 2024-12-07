@@ -22,10 +22,55 @@
             right: 10px;
             z-index: 1000;
         }
+
+        #controls {
+            position: fixed;
+            left: 10px;
+            top: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 15px;
+            border-radius: 5px;
+            z-index: 1000;
+        }
+
+        .slider-container {
+            margin: 10px 0;
+        }
+
+        .slider-container label {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        #waveStats {
+            position: fixed;
+            left: 10px;
+            bottom: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #00ff00;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+        }
     </style>
 </head>
 
 <body>
+
+    <div id="controls">
+        <div class="slider-container">
+            <label for="surfaceTension">Surface Tension: <span id="surfaceTensionValue">0.1</span></label>
+            <input type="range" id="surfaceTension" min="0" max="0.5" step="0.01" value="0.1">
+        </div>
+        <div class="slider-container">
+            <label for="gravity">Gravity: <span id="gravityValue">0.001</span></label>
+            <input type="range" id="gravity" min="0" max="0.005" step="0.0001" value="0.001">
+        </div>
+        <button id="resetBtn">Reset Simulation</button>
+        <button id="togglePause">Pause</button>
+    </div>
+    <div id="waveStats"></div>
 
     <canvas id="canvas" width="600" height="600"></canvas>
     <div id="debug" style="font-family: monospace; margin-top: 10px;"></div>
@@ -51,15 +96,30 @@
 
         let f = Array.from({ length: 9 }, () => Array(nx).fill().map(() => Array(ny).fill(1)));
 
+        // Add gravity constant
+        const gravity = 0.001; // Reduced from 0.005
+
         function initializeLattice() {
             for (let x = 0; x < nx; x++) {
                 for (let y = 0; y < ny; y++) {
-                    f.forEach(k => k[x][y] = y > ny / 2 ? 2 : 1); // Water below, air above
+                    // Fill bottom 40% with water (higher density)
+                    const isWater = y > ny * 0.6;
+                    const baseDensity = isWater ? 2.5 : 0.5; // Increased density contrast
+                    for (let k = 0; k < 9; k++) {
+                        f[k][x][y] = weights[k] * baseDensity;
+                    }
                 }
             }
         }
 
         function equilibrium(rho, ux, uy) {
+            // Set a maximum velocity limit to prevent instability
+            const maxVelocity = 0.1;
+
+            // Apply gravity as a base velocity, scaled by density difference from equilibrium
+            const densityDiff = rho - 1.0;  // difference from equilibrium density
+            uy = Math.min(maxVelocity, Math.max(-maxVelocity, uy + gravity * densityDiff));
+
             return velocityVectors.map((c, i) => {
                 const cu = 3 * (c[0] * ux + c[1] * uy);
                 return weights[i] * rho * (1 + cu + (cu * cu) / 2 - 1.5 * (ux * ux + uy * uy));
@@ -93,6 +153,37 @@
             const criticalTemp = 1.0;
 
             return (rho - criticalDensity) * (T - criticalTemp) * 0.1;
+        }
+
+
+        // Add new boundary condition function
+        function applyBoundaryConditions() {
+            // Bottom wall (no-slip boundary)
+            for (let x = 0; x < nx; x++) {
+                for (let k = 0; k < 9; k++) {
+                    // Full bounce-back for bottom wall
+                    f[k][x][ny - 1] = f[8 - k][x][ny - 2];
+                }
+            }
+
+            // Side walls (no-slip boundary) with enhanced containment
+            for (let y = 0; y < ny; y++) {
+                for (let k = 0; k < 9; k++) {
+                    // Left wall
+                    f[k][0][y] = f[8 - k][1][y];
+                    // Right wall
+                    f[k][nx - 1][y] = f[8 - k][nx - 2][y];
+                }
+            }
+
+            // Top wall (partial slip to allow air movement but contain water)
+            for (let x = 0; x < nx; x++) {
+                for (let k = 0; k < 9; k++) {
+                    if (velocityVectors[k][1] > 0) { // Only reflect upward velocities
+                        f[k][x][0] = f[8 - k][x][1];
+                    }
+                }
+            }
         }
 
         function update() {
@@ -136,6 +227,7 @@
             }
 
             f = newF;
+            applyBoundaryConditions(); // Apply boundaries after streaming
             draw();
         }
 
@@ -168,8 +260,10 @@
             mouseGridX = Math.floor(mouseX / cellSize);
             mouseGridY = Math.floor(mouseY / cellSize);
             if (isMouseDown && mouseGridX >= 0 && mouseGridX < nx && mouseGridY >= 0 && mouseGridY < ny) {
-
-                f[0][mouseGridX][mouseGridY] = 5.5;
+                const force = 0.1;  // Strength of the disturbance
+                for (let k = 0; k < 9; k++) {
+                    f[k][mouseGridX][mouseGridY] += weights[k] * force;
+                }
             }
         });
 
