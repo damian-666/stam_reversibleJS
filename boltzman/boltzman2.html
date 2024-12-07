@@ -54,6 +54,8 @@
             font-family: monospace;
         }
     </style>
+    <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin">
+    <meta http-equiv="Cross-Origin-Embedder-Policy" content="require-corp">
 </head>
 
 <body>
@@ -98,6 +100,10 @@
 
         // Add gravity constant
         const gravity = 0.001; // Reduced from 0.005
+
+        // Add after the existing constants
+        const tracers = [];
+        const numTracers = 100;
 
         function initializeLattice() {
             for (let x = 0; x < nx; x++) {
@@ -216,6 +222,11 @@
 
 
                     const phaseTransitionForce = calculatePhaseTransition(rho, T);
+
+                    //debug out if thee was a transition , now i see hideous sptty thigs from th e sky and teh left side.. i dont see water or waves
+                    // i dont see an y tracers that van so the velcoty of the currents. put some dot int hte that just moe in the velocty field in the  water, and for air, have the denisty relate to some temrperate tha goest from the water water to the colder air
+
+
                     for (let k = 0; k < 9; k++) {
                         f[k][x][y] += (fEq[k] - f[k][x][y]) / tau;
                         const xk = (x + velocityVectors[k][0] + nx) % nx;
@@ -228,24 +239,47 @@
 
             f = newF;
             applyBoundaryConditions(); // Apply boundaries after streaming
+            updateTracers();
             draw();
         }
 
         function draw() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw fluid
             for (let x = 0; x < nx; x++) {
                 for (let y = 0; y < ny; y++) {
                     const rho = f.map(val => val[x][y]).reduce((a, b) => a + b, 0);
                     let color;
-                    if (rho > 1.5) { // Basic threshold to differentiate phases
-                        color = `rgb(0,0, ${Math.min(255, rho * 15)})`; // Blue for water
+                    if (rho > 1.5) {
+                        // Water: deeper blue for higher density
+                        const blue = Math.min(255, 150 + rho * 40);
+                        color = `rgb(0, 50, ${blue})`;
                     } else {
-                        color = `rgb(170, 220, ${Math.min(255, rho * 0.2)})`; // Lighter blue for air
+                        // Air: white to light blue gradient based on density
+                        const value = Math.min(255, 200 + rho * 30);
+                        color = `rgb(${value}, ${value}, 255)`;
                     }
-                    ctx.fillStyle = color; // Remove the multiplication
+                    ctx.fillStyle = color;
                     ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
                 }
             }
+
+            // Draw tracers
+            tracers.forEach(tracer => {
+                ctx.beginPath();
+                ctx.arc(
+                    tracer.x * cellSize,
+                    tracer.y * cellSize,
+                    tracer.isWater ? 2 : 1,
+                    0,
+                    2 * Math.PI
+                );
+                ctx.fillStyle = tracer.isWater ? 'rgba(255, 255, 255, 0.8)' : 'rgba(255, 0, 0, 0.5)';
+                ctx.fill();
+            });
+
+            // Update debug info
             debug.innerText = `Mouse: ${mouseX}, ${mouseY} | Density at (${mouseGridX}, ${mouseGridY}): ${f[0][mouseGridX]?.[mouseGridY]?.toFixed(2) || 'N/A'}`;
         }
 
@@ -267,8 +301,51 @@
             }
         });
 
+        // Add this new function
+        function initializeTracers() {
+            tracers.length = 0;
+            for (let i = 0; i < numTracers; i++) {
+                // Place tracers in both water and air regions
+                tracers.push({
+                    x: Math.random() * nx,
+                    y: Math.random() * ny,
+                    // Store if tracer is in water (for different visualization)
+                    isWater: Math.random() > 0.5
+                });
+            }
+        }
+
+        // Update tracer movement function
+        function updateTracers() {
+            tracers.forEach(tracer => {
+                const gridX = Math.floor(tracer.x);
+                const gridY = Math.floor(tracer.y);
+
+                // Skip if outside bounds
+                if (gridX < 0 || gridX >= nx || gridY < 0 || gridY >= ny) return;
+
+                // Calculate local velocity
+                let rho = 0, ux = 0, uy = 0;
+                for (let k = 0; k < 9; k++) {
+                    rho += f[k][gridX][gridY];
+                    ux += velocityVectors[k][0] * f[k][gridX][gridY];
+                    uy += velocityVectors[k][1] * f[k][gridX][gridY];
+                }
+                ux /= rho || 1;
+                uy /= rho || 1;
+
+                // Update position
+                tracer.x = (tracer.x + ux + nx) % nx;
+                tracer.y = (tracer.y + uy + ny) % ny;
+
+                // Update water/air state based on local density
+                tracer.isWater = rho > 1.5;
+            });
+        }
+
         initializeLattice();
-        setInterval(update, 100); // Update every 100 ms
+        initializeTracers();
+        setInterval(update, 60); // Update every 100 ms
     </script>
 
 </body>
