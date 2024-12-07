@@ -25,7 +25,7 @@
         const nx = 300; // Grid width
         const ny = 300;  // Grid height
         const tau = 0.6; // Relaxation time
-        const cellSize = 1; // Size of each cell
+        const cellSize = 3; // Size of each cell
         let isMouseDown = false;
 
         // Lattice velocities and weights for D2Q9 model
@@ -93,7 +93,7 @@
                 for (let y = 0; y < ny; y++) {
                     const rho = f.map(val => val[x][y]).reduce((a, b) => a + b, 0);
                     let color;
-                    if (rho > 2.5) { // Basic threshold to differentiate phases
+                    if (rho > 1.5) { // Basic threshold to differentiate phases
                         color = `rgb(0,0, ${Math.min(255, rho * 15)})`; // Blue for water
                     } else {
                         color = `rgb(170, 220, ${Math.min(255, rho * 0.2)})`; // Lighter blue for air
@@ -116,7 +116,7 @@
             mouseGridX = Math.floor(mouseX / cellSize);
             mouseGridY = Math.floor(mouseY / cellSize);
             if (isMouseDown && mouseGridX >= 0 && mouseGridX < nx && mouseGridY >= 0 && mouseGridY < ny) {
-                f.forEach(k => k[mouseGridX][mouseGridY] += 0.5); // Perturbation effect
+                f.forEach(k => k[mouseGridX][mouseGridY] += 5.5); // Perturbation effect
             }
         });
 
