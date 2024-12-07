@@ -9,6 +9,19 @@
         canvas {
             border: 1px solid black;
         }
+
+        #debug {
+            font-family: monospace;
+            margin-top: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #00ff00;
+            padding: 10px;
+            border-radius: 5px;
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+        }
     </style>
 </head>
 
@@ -26,6 +39,7 @@
         const ny = 300;  // Grid height
         const tau = 0.6; // Relaxation time
         const cellSize = 3; // Size of each cell
+        const T = 1.0; // Temperature parameter (normalized units)
         let isMouseDown = false;
 
         // Lattice velocities and weights for D2Q9 model
@@ -52,6 +66,35 @@
             });
         }
 
+
+        /**
+       * Calculates the surface tension force for a 1D wave simulation.
+       * @param {number} rho - Density of the fluid.
+       * @param {number} gradRho - Gradient of the density.
+       * @returns {number} The surface tension force.
+       */
+
+        function calculateSurfaceTension(rho, gradRho) {
+
+            return -0.5 * gradRho * rho;
+            //document property with
+        }
+        // ... phase transition based on temperature and pressure ...
+
+        /**
+         * Calculates phase transition effects based on density and temperature
+         * @param {number} rho - Local density of the fluid
+         * @param {number} T - Local temperature
+         * @returns {number} Phase transition force
+         */
+        function calculatePhaseTransition(rho, T) {
+            // Simple phase transition model based on temperature and density
+            const criticalDensity = 1.5;
+            const criticalTemp = 1.0;
+
+            return (rho - criticalDensity) * (T - criticalTemp) * 0.1;
+        }
+
         function update() {
             const newF = Array.from({ length: 9 }, () => Array(nx).fill().map(() => Array(ny).fill(0)));
 
@@ -71,10 +114,19 @@
                     uy /= rho || 1; // Avoid by zero
 
                     const fEq = equilibrium(rho, ux, uy);
+                    // Calculate gradient of density for surface tension force
+                    let gradRhoX = 0, gradRhoY = 0;
+                    if (x > 0 && x < nx - 1 && y > 0 && y < ny - 1) {
+                        gradRhoX = (f[1][x + 1][y] - f[3][x - 1][y]) / 2;
+                        gradRhoY = (f[2][x][y + 1] - f[4][x][y - 1]) / 2;
+                    }
+                    const gradRho = Math.sqrt(gradRhoX * gradRhoX + gradRhoY * gradRhoY);
+                    const surfaceTensionForce = calculateSurfaceTension(rho, gradRho);
 
+
+                    const phaseTransitionForce = calculatePhaseTransition(rho, T);
                     for (let k = 0; k < 9; k++) {
                         f[k][x][y] += (fEq[k] - f[k][x][y]) / tau;
-
                         const xk = (x + velocityVectors[k][0] + nx) % nx;
                         const yk = (y + velocityVectors[k][1] + ny) % ny;
 
@@ -116,7 +168,8 @@
             mouseGridX = Math.floor(mouseX / cellSize);
             mouseGridY = Math.floor(mouseY / cellSize);
             if (isMouseDown && mouseGridX >= 0 && mouseGridX < nx && mouseGridY >= 0 && mouseGridY < ny) {
-                f.forEach(k => k[mouseGridX][mouseGridY] += 5.5); // Perturbation effect
+
+                f[0][mouseGridX][mouseGridY] = 5.5;
             }
         });
 
