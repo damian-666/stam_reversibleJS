@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Riemann Solver - Sod's Shock Tube</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f0f0f0; }
+        #controls { margin: 20px; }
+        #controls button { margin-right: 10px; padding: 10px 20px; }
+        canvas { border: 1px solid #ccc; display: block; margin: 0 auto; background-color: #fff; }
+        #info { text-align: center; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <button id="startStopBtn">Pause</button>
+        <button id="resetBtn">Reset</button>
+        <button id="reverseBtn">Reverse</button>
+    </div>
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <div id="info">
+        <p>Blue: Density | Red: Velocity | Green: Pressure</p>
+    </div>
+
+    <script>
+        // Simulation parameters
+        const N = 400;         // Number of grid points
+        const GAMMA = 1.4;     // Ratio of specific heats
+        const CFL = 0.9;       // Courant-Friedrichs-Lewy number
+        const dx = 1.0 / N;    // Spatial step size
+
+        // Simulation state
+        let rho = new Float64Array(N);      // Density
+        let u = new Float64Array(N);        // Velocity
+        let p = new Float64Array(N);        // Pressure
+        let E = new Float64Array(N);        // Total energy per unit volume
+
+        // Simulation control variables
+        let isRunning = true;
+        let isReversing = false;
+        let time = 0.0;
+
+        // Canvas setup
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const WIDTH = canvas.width;
+        const HEIGHT = canvas.height;
+
+        /**
+         * Initializes the simulation with the Sod's shock tube initial conditions.
+         */
+        function initializeSimulation() {
+            for (let i = 0; i < N; i++) {
+                if (i < N / 2) {
+                    // Left side
+                    rho[i] = 1.0;
+                    u[i] = 0.0;
+                    p[i] = 1.0;
+                } else {
+                    // Right side
+                    rho[i] = 0.125;
+                    u[i] = 0.0;
+                    p[i] = 0.1;
+                }
+                E[i] = p[i] / (GAMMA - 1) + 0.5 * rho[i] * u[i] * u[i];
+            }
+            time = 0.0;
+        }
+
+        /**
+         * Computes the fluxes for the conserved variables.
+         */
+        function computeFluxes() {
+            let flux = [];
+            for (let i = 0; i < N; i++) {
+                let F = {};
+                F.rho = rho[i] * u[i];
+                F.momentum = rho[i] * u[i] * u[i] + p[i];
+                F.energy = (E[i] + p[i]) * u[i];
+                flux.push(F);
+            }
+            return flux;
+        }
+
+        /**
+         * Performs a simulation step using the MacCormack method.
+         */
+        function simulateStep() {
+            // Compute time step based on CFL condition
+            let maxSpeed = 0.0;
+            for (let i = 0; i < N; i++) {
+                let a = Math.sqrt(GAMMA * p[i] / rho[i]);
+                let speed = Math.abs(u[i]) + a;
+                if (speed > maxSpeed) {
+                    maxSpeed = speed;
+                }
+            }
+            let dt = CFL * dx / maxSpeed;
+            if (isReversing) dt = -dt;
+            time += dt;
+
+            // Predictor step
+            let rho_pred = new Float64Array(N);
+            let u_pred = new Float64Array(N);
+            let p_pred = new Float64Array(N);
+            let E_pred = new Float64Array(N);
+
+            let flux = computeFluxes();
+
+            for (let i = 0; i < N - 1; i++) {
+                rho_pred[i] = rho[i] - (dt / dx) * (flux[i + 1].rho - flux[i].rho);
+                let momentum = rho[i] * u[i] - (dt / dx) * (flux[i + 1].momentum - flux[i].momentum);
+                u_pred[i] = momentum / rho_pred[i];
+                E_pred[i] = E[i] - (dt / dx) * (flux[i + 1].energy - flux[i].energy);
+                p_pred[i] = (GAMMA - 1) * (E_pred[i] - 0.5 * rho_pred[i] * u_pred[i] * u_pred[i]);
+            }
+
+            // Corrector step
+            let flux_pred = [];
+            for (let i = 0; i < N; i++) {
+                let F = {};
+                F.rho = rho_pred[i] * u_pred[i];
+                F.momentum = rho_pred[i] * u_pred[i] * u_pred[i] + p_pred[i];
+                F.energy = (E_pred[i] + p_pred[i]) * u_pred[i];
+                flux_pred.push(F);
+            }
+
+            for (let i = 1; i < N; i++) {
+                rho[i] = 0.5 * (rho[i] + rho_pred[i] - (dt / dx) * (flux_pred[i].rho - flux_pred[i - 1].rho));
+                let momentum = 0.5 * (rho[i] * u[i] + rho_pred[i] * u_pred[i] - (dt / dx) * (flux_pred[i].momentum - flux_pred[i - 1].momentum));
+                u[i] = momentum / rho[i];
+                E[i] = 0.5 * (E[i] + E_pred[i] - (dt / dx) * (flux_pred[i].energy - flux_pred[i - 1].energy));
+                p[i] = (GAMMA - 1) * (E[i] - 0.5 * rho[i] * u[i] * u[i]);
+            }
+
+            // Apply boundary conditions (fixed)
+            rho[0] = rho[1];
+            u[0] = u[1];
+            p[0] = p[1];
+            E[0] = E[1];
+
+            rho[N - 1] = rho[N - 2];
+            u[N - 1] = u[N - 2];
+            p[N - 1] = p[N - 2];
+            E[N - 1] = E[N - 2];
+        }
+
+        /**
+         * Renders the simulation results.
+         */
+        function render() {
+            ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+            // Draw density (blue)
+            ctx.strokeStyle = 'blue';
+            ctx.beginPath();
+            for (let i = 0; i < N; i++) {
+                let x = (i / N) * WIDTH;
+                let y = HEIGHT - (rho[i] / 1.0) * (HEIGHT / 3);
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+
+            // Draw velocity (red)
+            ctx.strokeStyle = 'red';
+            ctx.beginPath();
+            for (let i = 0; i < N; i++) {
+                let x = (i / N) * WIDTH;
+                let y = HEIGHT - ((u[i] + 1) / 2) * (HEIGHT / 3);
+                if (i === 0) ctx.moveTo(x, y + HEIGHT / 3);
+                else ctx.lineTo(x, y + HEIGHT / 3);
+            }
+            ctx.stroke();
+
+            // Draw pressure (green)
+            ctx.strokeStyle = 'green';
+            ctx.beginPath();
+            for (let i = 0; i < N; i++) {
+                let x = (i / N) * WIDTH;
+                let y = HEIGHT - (p[i] / 1.0) * (HEIGHT / 3);
+                if (i === 0) ctx.moveTo(x, y + (2 * HEIGHT) / 3);
+                else ctx.lineTo(x, y + (2 * HEIGHT) / 3);
+            }
+            ctx.stroke();
+        }
+
+        /**
+         * Simulation loop.
+         */
+        function simulate() {
+            if (!isRunning) {
+                requestAnimationFrame(simulate);
+                return;
+            }
+
+            simulateStep();
+            render();
+
+            requestAnimationFrame(simulate);
+        }
+
+        // Controls
+        const startStopBtn = document.getElementById('startStopBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const reverseBtn = document.getElementById('reverseBtn');
+
+        startStopBtn.addEventListener('click', function () {
+            isRunning = !isRunning;
+            startStopBtn.textContent = isRunning ? 'Pause' : 'Resume';
+            if (isRunning) simulate();
+        });
+
+        resetBtn.addEventListener('click', function () {
+            initializeSimulation();
+        });
+
+        reverseBtn.addEventListener('click', function () {
+            isReversing = !isReversing;
+            reverseBtn.textContent = isReversing ? 'Forward' : 'Reverse';
+        });
+
+        // Initialize and start simulation
+        initializeSimulation();
+        simulate();
+    </script>
+</body>
+</html>
