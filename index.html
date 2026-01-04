@@ -437,7 +437,7 @@
                         data[index + 3] = 255; // Alpha
                     } else {
                         let d = density[idx];
-                        let intensity = Math.min(255, d * 10);
+                        let intensity =-1* Math.min(255, d * 10);
                         data[index + 0] = (color.r * intensity) / 255;
                         data[index + 1] = (color.g * intensity) / 255;
                         data[index + 2] = (color.b * intensity) / 255;
